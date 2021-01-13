@@ -83,8 +83,10 @@ footywire3A <- get_footywire_stats(ids = 9928:9936)
 footywire3B <- get_footywire_stats(ids = 10126:10141)
 footywire3BB <- get_footywire_stats(ids = 10143:10152)
 footywire3C <- get_footywire_stats(ids = 10182:10190)
-footywire3D <- get_footywire_stats(ids = 10209:10288) 
+```
 
+``````{r load data456, results='hide', message=FALSE, warning=FALSE}
+footywire3D <- get_footywire_stats(ids = 10209:10326) 
 ```
 
 
@@ -104,7 +106,7 @@ footywire5 <- get_footywire_stats(ids = 9307:9513)
 # Bind into a single data-frame 
 Season2017to2020 <- rbind(footywire1, footywire2, footywire3A, footywire3B, footywire3BB, footywire3C, footywire3D, footywire4, footywire5)
 # lower case, under_score all column titles
-names(Season2017to2020) <- to_snake_case(names(Season2019))
+names(Season2017to2020) <- to_snake_case(names(Season2017to2020))
 # remove original extracts
 # footywire1 <- NULL
 # footywire2 <- NULL
@@ -118,7 +120,7 @@ This affords great flexibility to explore both match-level and player-level stat
 
 ```{r csv, results='hide', message=FALSE, warning=FALSE}
 # Standard .csv export 
-write.csv(Season2017to2020, file = "Season2017to2020.csv",
+write.csv(Season2017to2020, file = "Season2017to2020_Complete.csv",
           na = "", 
           row.names = FALSE)
 ```
@@ -264,7 +266,7 @@ However I decided an easier method would be to source this data directly from [A
 ```{r additional score columns, message = FALSE, warning = FALSE }
 # read in data from AFL tables
 AT <- get_afltables_stats(start_date = '2017-01-01',
-                          end_date = '2020-09-03')
+                          end_date = '2020-12-31')
 
 # replace dots with underscores, all lower case
 names(AT) <- to_snake_case(names(AT))
@@ -452,6 +454,16 @@ kable(head(Matches)) %>% #head limits to just top rows
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive", font_size = 8))
 ```
 
+```{r write csv's}
+write.csv(Matches, file = "Matches.csv",
+          na = "", 
+          row.names = FALSE)
+
+write.csv(Matches_Numeric, file = "Matches_Numeric.csv",
+          na = "", 
+          row.names = FALSE)
+```
+
 ## Prioritise Statistics of Interest
 
 It's worth taking a moment to review the included statistics. Many metrics are very similar, so we would expect collinearity between them. Based on little more than intuition, I have opted to delete the below metrics: 
@@ -597,7 +609,7 @@ To begin, lets construct a dissimilarity matrix, utilizing *Gowers Distance*. Th
 
 ```{r PCA 1}
 d <- 
-  Matches_2019_Numeric %>% 
+  Matches_Numeric %>% 
   daisy(metric = "gower")
 ```
 
@@ -637,11 +649,11 @@ A final step we can take is to join our grouping demarcations back to the initia
 
 ```{R pca 3, results='hide', message=FALSE, warning=FALSE}
 kfit$cluster
-Matches_2019_Numeric[,"Cluster"] <- kfit$cluster
+Matches_Numeric[,"Cluster"] <- kfit$cluster
 ```
 
 ```{R pca 4, results='hide', message=FALSE, warning=FALSE}
-MatchGroup <- Matches_2019_Numeric %>% 
+MatchGroup <- Matches_Numeric %>% 
   group_by(Cluster) %>% 
   summarise_all(funs(mean)) %>% 
   mutate_if(is.numeric, round, 1)
