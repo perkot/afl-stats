@@ -1,0 +1,575 @@
+---
+title: "Exploring the relationship between common AFL statistics & winning margin"
+author: "Tom Perkins"
+date: "11 August 2020"
+output:
+  prettydoc::html_pretty:
+    theme: caymen
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Round 11s match of the 2020 AFL season between Port Adelaide & Richmond has been widely praised as the "best game of the season". A fast-finishing Port Adelaide prevailed by 21 points. Despite being a close game, match-reports appear to show the game was statistically dominated by Port Adelaide
+
+Consider [ESPNs](https://www.espn.com.au/afl/matchup?gameId=1070341) summary 
+
+Port Adelaide were
+
+* +43 in contested possessions
+* +31 for inside 50s
+* +80 for total possessions 
+
+Despite these discrepancies, the game was close for most of the day, with Richmond even leading at 3/4 time
+
+This had me wondering how important commonly measured AFL statistics are to the end result?
+
+To better understand this, I have aggregated all AFL match-day statistics for season 2019, & looked at the relationship between game-day stats & the eventual winning margin of the game 
+
+Specifically I have focused upon: 
+
+**"differential statistics"** - what was the difference between the winning & losing side for metric x, y or z? 
+
+Below I have outlined the programming to do this
+
+## The Data
+
+[AFLTables](https://afltables.com/afl/afl_index.html) & [Footywire](https://www.footywire.com/) are undoubtedly the best independent online resources for footy-related statistics 
+
+R users are fortunate that the vast depth of statistics from these websites are easily accessible via the **["FitzRoy"](https://cran.r-project.org/web/packages/fitzRoy/index.html)** package
+
+Let's read-in FitzRoy, and all other packages we will use for analysis  
+
+```{r Load dependencies, results='hide', message=FALSE, warning=FALSE}
+# Data extraction 
+library(devtools)
+library(fitzRoy)
+# Data cleaning 
+library(snakecase)
+library(tidyr)
+library(dplyr)
+library(reshape)
+library(knitr)
+# Data visualisation
+library(kableExtra)
+library(corrplot)
+library(taucharts)
+library(kableExtra)
+# Data analysis 
+library(ClustOfVar)
+library(cluster)
+```
+
+FitzRoy provides a straight-forward function to read-in data from Footywire (*"get_footywire_stats"*). The only required input is which matches to include in the data-extract via the websites **Match_ids**
+
+The range of "match_ids" has been limited to the 207 games contested in the 2019 season. Match_ids can be identified via the web-URL for each game on FootyWire
+
+I encountered some buggy-behaviour reading in every required match in a single line of code, but found splitting it out worked OK 
+
+The match-data from footywire takes ~ 10-15 minutes to read, so patience is required :)
+
+```{r load data, results='hide', message=FALSE, warning=FALSE}
+# Extract all games from 2019 AFL season
+footywire2 <- get_footywire_stats(ids = 9876:9927) 
+footywire1 <- get_footywire_stats(ids = 9721:9875) 
+```
+
+```{r load data2, results='hide', message=FALSE, warning=FALSE}
+# Extract all games from 2020 AFL season
+footywire3A <- get_footywire_stats(ids = 9928:9936)
+footywire3B <- get_footywire_stats(ids = 10126:10141)
+footywire3BB <- get_footywire_stats(ids = 10143:10152)
+footywire3C <- get_footywire_stats(ids = 10182:10190)
+```
+
+``````{r load data456, results='hide', message=FALSE, warning=FALSE}
+footywire3D <- get_footywire_stats(ids = 10209:10326) 
+```
+
+
+```{r load data3, results='hide', message=FALSE, warning=FALSE}
+# Extract all games from 2018 AFL season
+footywire4 <- get_footywire_stats(ids = 9514:9720) 
+```
+
+```{r load data4, results='hide', message=FALSE, warning=FALSE}
+# Extract all games from 2017 AFL season
+footywire5 <- get_footywire_stats(ids = 9307:9513) 
+```
+
+```{r bind data, results='hide', message=FALSE, warning=FALSE}
+# Bind into a single data-frame 
+Season2017to2020 <- rbind(footywire1, footywire2, footywire3A, footywire3B, footywire3BB, footywire3C, footywire3D, footywire4, footywire5)
+# lower case, under_score all column titles
+names(Season2017to2020) <- to_snake_case(names(Season2017to2020))
+# remove original extracts
+# footywire1 <- NULL
+# footywire2 <- NULL
+```
+
+The structure of this data-extract is 207 games x 44 selected players for each game, which produces 9108 rows of data
+
+Each row reports the statistics of an individual player in every game 
+
+This affords great flexibility to explore both match-level and player-level statistics 
+
+```{r print table preview, echo=FALSE}
+# Print table 
+kable(head(Season2017to2020)) %>% #head limits to just top rows
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive", font_size = 8))
+```
+
+## Re-shape & aggregate  
+
+Two key steps required to to transform this data for analysis are:
+
+* Aggregate the data so each row reflects match-level statistics rather than        player level, &
+* Pivot the data so every row reflects a unique game of the season
+  
+We will use several "tidyverse" functions to first aggregate our match-level statistics 
+
+```{r change variable types, message=FALSE, warning=FALSE}
+# tally up all key statistics per game, per team 
+Ag <- Season2017to2020 %>%
+  dplyr::select(season, 
+         round,
+         date,
+         team, 
+         opposition, 
+         status,
+         cp, # CONTESTED POSSESSION
+         up, # UNCONTESTED POSSESSION 
+         de, # DISPOSAL EFFICIENCY 
+         one_percenters, # ONE PERCENTERS 
+         mg, # METRES GAINED
+         to, # TURNOVER 
+         k, # KICKS
+         hb, # HANDBALLS
+         d, # DISPOSALS
+         m, # MARK
+         i_50, # INSIDE 50
+         cl, # CLEARANCE
+         cg, # CLANGERS
+         r_50, # REBOUND 50 
+         ff, # FREES FOR 
+         fa, # FREES AGAINST
+         cm, # CONTESTED MARKS
+         ga_15, # GOAL ASSISTS
+         bo, # BOUNCES
+         ccl, # CENTRE CLEARANCES
+         scl, # STOPPAGE CLEARANCE 
+         itc, # INTERCEPTS
+         si, # SCORE INVOLVEMENTS 
+         t_5, # TACKLES INSIDE 50
+         match_id) %>% 
+  group_by(match_id, 
+           team, 
+           opposition, 
+           status,
+           season, 
+           round,
+           date) %>%
+  summarise(
+    CP = sum(cp),
+    UP = sum(up),
+    DE = round(mean(de),1),
+    OP = sum(one_percenters),
+    MG = round(sum(mg),1),
+    TO = sum(to),
+    K = sum(k),
+    HB = sum(hb),
+    D = sum(d),
+    M = sum(m),
+    I50 = sum(i_50),
+    CL = sum(cl),
+    CG = sum(cg),
+    R50 = sum(r_50),
+    FF = sum(ff),
+    FA = sum(fa),
+    CM = sum(cm),
+    GA = sum(ga_15),
+    BO = sum(bo),
+    CCL = sum(ccl),
+    SCL = sum(scl),
+    ITC = sum(itc),
+    SI = sum(si),
+    T5 = sum(t_5),
+  )
+```
+
+However, we have one further issue to address: Data for each match is split across two rows - one for the home team, the other for the away team. The required end-state is for data from both teams to be summarized in a single row 
+
+The dplyr function **spread** can *almost* solve this issue. However, it only accepts one "value" argument & we therefore are not able to pivot over multiple variables
+
+Fortunately, clever user [danr from the R Studio Community](https://community.rstudio.com/t/spread-with-multiple-value-columns/5378/2) wrote a function augmenting the spread-command to be able to do this. We will implement this below:
+
+```{r additional date columns }
+# remove opposition 
+Ag$opposition <- NULL
+
+# Function to spread across multiple values 
+myspread <- function(df, key, value) {
+  # quote key
+  keyq <- rlang::enquo(key)
+  # break value vector into quotes
+  valueq <- rlang::enquo(value)
+  s <- rlang::quos(!!valueq)
+  df %>% gather(variable, value, !!!s) %>%
+    unite(temp, !!keyq, variable) %>%
+    spread(temp, value)
+}
+
+# spread - so each row reflects a single game 
+Ag <- Ag %>%
+  myspread(key = status, value = c(team, CP, UP, DE, OP, MG, TO, K, HB, D, M,
+                                   I50, CL, CG, R50, FF, FA, CM, GA, BO, CCL,
+                                   SCL, ITC, SI, T5))
+```
+
+& after some final tidying ... 
+
+```{r additional date columns2 }
+# create common key
+Ag$JOIN_ID <- paste(Ag$date, "-", 
+                               Ag$Home_team, "-", 
+                               Ag$Away_team)
+
+# Re-order Columns
+Ag <- Ag[,c(2,3,4,1,55,52,27,30:51,53:54,5:26,28:29)]
+
+# Ensure data-set is actually a dataframe
+Ag <- as.data.frame(Ag)
+```
+
+We now have an aggregated, pivoted, tidied data-frame. Each game is captured as a unique row, and player statistics have been aggregated into team statistics. 
+
+To be sure the aggregation worked, I spot-checked a number of random matches against official match-day statistics. This confirmed the results of this analysis were consistent with official statistics
+
+However an important feature is missing - **the outcome of the game**. We can't get too far with these statistics if the winning team is unknown
+
+The match-result could in-theory be determined from this data-set. It would require calculating the overall team-scores from individual players goals & behinds
+
+However I decided an easier method would be to source this data directly from [AFL-tables](https://afltables.com/afl/afl_index.html), accessible again from the FitzRoy package  
+
+```{r additional score columns, message = FALSE, warning = FALSE }
+# read in data from AFL tables
+AT <- get_afltables_stats(start_date = '2017-01-01',
+                          end_date = '2020-12-31')
+
+# replace dots with underscores, all lower case
+names(AT) <- to_snake_case(names(AT))
+```
+
+In order to combine the two data-sets, a common key is required. By combining three columns which exist in **both data-sets** (date, home team & away team), I was able to create my own common key
+
+```{r change variable type }
+# create a common key 
+AT$JOIN_ID <- paste(AT$date, "-", 
+                    AT$home_team, "-", 
+                    AT$away_team)
+
+# Select scores - the only rows we would like to keep from this table 
+AT <- dplyr::select(AT, 
+                  JOIN_ID, 
+                  home_score, 
+                  away_score)
+
+# remove columns which are not unique 
+AT <- AT %>% distinct(JOIN_ID, .keep_all = TRUE)
+
+# Convert to dataframe
+AT <- as.data.frame(AT)
+```
+
+After some further tidying (error correction & harmonizing team names), the two data-sets are ready to be joined by the calculated **JOINID** column 
+
+```{r merge teams}
+# Ensure join columns are comparable 
+AT$JOIN_ID <- to_snake_case(AT$JOIN_ID)
+Ag$JOIN_ID <- as.character(Ag$JOIN_ID)
+Ag$JOIN_ID <- to_snake_case(Ag$JOIN_ID)
+
+# Other corrections
+AT$JOIN_ID <- gsub("greater_western_sydney", "gws", AT$JOIN_ID)
+AT$JOIN_ID <- gsub("brisbane_lions", "brisbane", AT$JOIN_ID)
+
+# Correct error in AFL tables listing Geelong as home-side in the 2019 Preliminary Final
+AT$JOIN_ID <- gsub("2019_09_20_geelong_richmond", "2019_09_20_richmond_geelong", AT$JOIN_ID)
+
+# Join Footywire & AFL tables 
+Ag <- left_join(Ag, AT, by = "JOIN_ID")
+```
+
+& some final tidying to re-order our variables, remove redundant variables, & convert statistics to numeric format
+
+```{r merge teams 2}
+# Re-order columns 
+Ag <- Ag[,c(1:7, 56:57, 8:55)]
+
+# Remove IDs - no longer required
+Ag$match_id <- NULL
+Ag$JOIN_ID <- NULL
+
+# need to change all stats columns from character to numeric 
+cols = c(8:55)    
+Ag[,cols] = apply(Ag[,cols], 2, function(x) as.numeric(as.character(x)));
+```
+
+Our data model is *nearly* complete with match-statistics for both home & away teams, & the total score for each team 
+
+The next step is to calculate the statistical **"differentials"** between the winning & losing teams 
+
+An issue is the winning-score could come from either the home or away score columns. As such a simple subtraction of these fields won't work.
+
+The necessary work-around is to split our data in two: *"winning home team"* & *"winning away team"*, then recombine them into an overall *"winning differentials"* data-frame
+
+Let's start with winning home team:
+
+```{r winning home team}
+# "HOME" Winners
+# Calculate a "winning margin" score - ultimately we want to see how different
+# statistics are related to this outcome variable 
+Ag$margin <- Ag$home_score - Ag$away_score
+
+# Subset only "home" team wins 
+WinnersHome <- filter(Ag, margin >= 1)
+
+# Create differential columns 
+WinnersHome$BO_Diff <- WinnersHome$Home_BO - WinnersHome$Away_BO
+WinnersHome$CCL_Diff <- WinnersHome$Home_CCL - WinnersHome$Away_CCL
+WinnersHome$CG_Diff <- WinnersHome$Home_CG - WinnersHome$Away_CG
+WinnersHome$CL_Diff <- WinnersHome$Home_CL - WinnersHome$Away_CL
+WinnersHome$CM_Diff <- WinnersHome$Home_CM - WinnersHome$Away_CM
+WinnersHome$CP_Diff <- WinnersHome$Home_CP - WinnersHome$Away_CP
+WinnersHome$D_Diff <- WinnersHome$Home_D - WinnersHome$Away_D
+WinnersHome$DE_Diff <- WinnersHome$Home_DE - WinnersHome$Away_DE
+WinnersHome$BO_Diff <- WinnersHome$Home_BO - WinnersHome$Away_BO
+WinnersHome$FA_Diff <- WinnersHome$Home_FA - WinnersHome$Away_FA
+WinnersHome$FF_Diff <- WinnersHome$Home_FF - WinnersHome$Away_FF
+WinnersHome$GA_Diff <- WinnersHome$Home_GA - WinnersHome$Away_GA
+WinnersHome$HB_Diff <- WinnersHome$Home_HB - WinnersHome$Away_HB
+WinnersHome$I50_Diff <- WinnersHome$Home_I50 - WinnersHome$Away_I50
+WinnersHome$ITC_Diff <- WinnersHome$Home_ITC - WinnersHome$Away_ITC
+WinnersHome$K_Diff <- WinnersHome$Home_K - WinnersHome$Away_K
+WinnersHome$M_Diff <- WinnersHome$Home_M - WinnersHome$Away_M
+WinnersHome$MG_Diff <- WinnersHome$Home_MG - WinnersHome$Away_MG
+WinnersHome$OP_Diff <- WinnersHome$Home_OP - WinnersHome$Away_OP
+WinnersHome$R50_Diff <- WinnersHome$Home_R50 - WinnersHome$Away_R50
+WinnersHome$SCL_Diff <- WinnersHome$Home_SCL - WinnersHome$Away_SCL
+WinnersHome$SI_Diff <- WinnersHome$Home_SI - WinnersHome$Away_SI
+WinnersHome$TO_Diff <- WinnersHome$Home_TO - WinnersHome$Away_TO
+WinnersHome$UP_Diff <- WinnersHome$Home_UP - WinnersHome$Away_UP
+WinnersHome$T5_Diff <- WinnersHome$Home_T5 - WinnersHome$Away_T5
+
+# Designate these games as "home" team winning 
+WinnersHome$Winner <- "HOME"
+WinnersHome$WinningTeam <- WinnersHome$Home_team
+
+cols = c(1:7,82,56:81) 
+WinnersHome <- WinnersHome[, cols]
+```
+
+Repeat this step for "winning away team"
+
+```{r winning away team}
+# "AWAY" Winners
+# Subset only "away" team wins 
+WinnersAway <- filter(Ag, margin <= -1)
+
+# Create differential columns 
+WinnersAway$BO_Diff <- WinnersAway$Away_BO - WinnersAway$Home_BO
+WinnersAway$CCL_Diff <- WinnersAway$Away_CCL - WinnersAway$Home_CCL
+WinnersAway$CG_Diff <- WinnersAway$Away_CG - WinnersAway$Home_CG
+WinnersAway$CL_Diff <- WinnersAway$Away_CL - WinnersAway$Home_CL
+WinnersAway$CM_Diff <- WinnersAway$Away_CM - WinnersAway$Home_CM
+WinnersAway$CP_Diff <- WinnersAway$Away_CP - WinnersAway$Home_CP
+WinnersAway$D_Diff <- WinnersAway$Away_D - WinnersAway$Home_D
+WinnersAway$DE_Diff <- WinnersAway$Away_DE - WinnersAway$Home_DE
+WinnersAway$BO_Diff <- WinnersAway$Away_BO - WinnersAway$Home_BO
+WinnersAway$FA_Diff <- WinnersAway$Away_FA - WinnersAway$Home_FA
+WinnersAway$FF_Diff <- WinnersAway$Away_FF - WinnersAway$Home_FF
+WinnersAway$GA_Diff <- WinnersAway$Away_GA - WinnersAway$Home_GA
+WinnersAway$HB_Diff <- WinnersAway$Away_HB - WinnersAway$Home_HB
+WinnersAway$I50_Diff <- WinnersAway$Away_I50 - WinnersAway$Home_I50
+WinnersAway$ITC_Diff <- WinnersAway$Away_ITC - WinnersAway$Home_ITC
+WinnersAway$K_Diff <- WinnersAway$Away_K - WinnersAway$Home_K
+WinnersAway$M_Diff <- WinnersAway$Away_M - WinnersAway$Home_M
+WinnersAway$MG_Diff <- WinnersAway$Away_MG - WinnersAway$Home_MG
+WinnersAway$OP_Diff <- WinnersAway$Away_OP - WinnersAway$Home_OP
+WinnersAway$R50_Diff <- WinnersAway$Away_R50 - WinnersAway$Home_R50
+WinnersAway$SCL_Diff <- WinnersAway$Away_SCL - WinnersAway$Home_SCL
+WinnersAway$SI_Diff <- WinnersAway$Away_SI - WinnersAway$Home_SI
+WinnersAway$TO_Diff <- WinnersAway$Away_TO - WinnersAway$Home_TO
+WinnersAway$UP_Diff <- WinnersAway$Away_UP - WinnersAway$Home_UP
+WinnersAway$T5_Diff <- WinnersAway$Away_T5 - WinnersAway$Home_T5
+
+# Designate these games as "home" team winning 
+WinnersAway$Winner <- "AWAY"
+
+# Designate these games as "home" team winning 
+WinnersAway$WinningTeam <- WinnersAway$Away_team
+
+cols = c(1:7,82,56:81) 
+WinnersAway <- WinnersAway[, cols]
+
+# Change margin to absolute
+WinnersAway$margin <- abs(WinnersAway$margin)
+```
+
+Now re-combine these two data-sets into our final data-frame of "winning differentials"
+
+```{r bind home and away}
+# Bind together 
+Matches <- rbind(WinnersHome, WinnersAway)
+
+# Alternative version with only numeric columns 
+cols = c(9:33)
+Matches_Numeric <- Matches[, cols]
+```
+
+Which results in the final data-model 
+
+Each row reflects a single match of the 2019 season, & includes: 
+
+* the teams involved in each match
+* the date of the match
+* which team won
+* the margin of the win
+* 24 "statistical differences" for the winning team 
+
+```{r print table preview3, echo=FALSE}
+kable(head(Matches)) %>% #head limits to just top rows
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive", font_size = 8))
+```
+
+## Prioritise Statistics of Interest
+
+It's worth taking a moment to review the included statistics. Many metrics are very similar, so we would expect collinearity between them. Based on little more than intuition, I have opted to delete the below metrics: 
+
+* Removed "Frees-Against", as it is a perfect mirror of "Frees-For" - differences here are only really useful at an individual player level rather than in aggregate
+* Removed "centre clearances" & "stoppage clearances" in favor of keeping "total clearances" for this analysis 
+* Removed "total disposals" in favor of keeping its constituent elements - total kicks & handballs 
+* Removed "total marks" in favor of keeping total contested marks (a subset of total marks). I figured contested marking would be more closely associated with winning margin
+* Removed "turn-overs" in favor of keeping intercept possessions as these two measures are unsurprisingly highly correlated
+* Removed "Score Involvements" & "Goal Assists". These metrics are clearly a function of the score margin, & as such would be uninformative to any analysis
+
+```{r trim data}
+Matches_Numeric$FA_Diff <- NULL # FA a mirror of FF 
+Matches_Numeric$CCL_Diff <- NULL # already have clearance data
+Matches_Numeric$SCL_Diff <- NULL # already have clearance data
+Matches_Numeric$D_Diff <- NULL # already have kick & handball data
+Matches_Numeric$M_Diff <- NULL # selected contested marking instead
+Matches_Numeric$TO_Diff <- NULL # selected contested marking instead
+Matches_Numeric$SI_Diff <- NULL # in effect, a component of margin
+Matches_Numeric$GA_Diff <- NULL # in effect, a component of margin
+```
+
+## Visualise & Explore 
+
+### Correlation Matrices 
+
+The R package [Corrplot](https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html) is one of the easiest, & most engaging ways to summarize the relationships between variables via a matrix of correlations 
+
+Let's first create a matrix of correlations
+
+```{r cor matrix}
+# create matrix of correlations
+M <- cor(Matches_Numeric)
+# round data to 2 decimal places
+M <- round(M, 2)
+```
+
+& now generate two correlation plots for the data 
+
+The *first* plot uses coloured squares to summarize the correlations between 
+variables, ranging from  navy (perfect positive correlation) to maroon (perfect negative correlation). The strength of the correlation is also depicted by the size of the square
+
+The *second* plot summarises the same information, but provides the actual R values instead of colored squares 
+
+With corrplot you can pass arguments to augment aesthetics such as text-size. These text-editing steps are important to improve the aesthetic of the plot(s), particularly when there are many variables, and/or long variable names 
+
+```{r cor matrix 2}
+CM1 <- 
+corrplot(M,
+         method = "square", 
+         type = "upper",
+         tl.col= "black", 
+         tl.cex = 0.6, # Text label color and rotation
+         cl.cex = 0.6 # Correlation label color and rotation
+         )
+
+CM2 <- 
+corrplot(M,
+         method = "number", 
+         type = "upper",
+         tl.col="black", 
+         # tl.srt=45, 
+         tl.cex = 0.6, # Text label color and rotation
+         cl.cex = 0.6, # Correlation label color and rotation
+         number.cex = .6
+         )
+```
+
+In the above Figures, the **top horizontal row of the grid** is of most interest. This row depicts each *statistical-differentials* correlation with the *winning margin* 
+
+The immediate stand-out along this row is MG_Diff : **Metres Gained Differential**
+
+What this part of the grid shows is the larger the number of metres gained by the winning team, the greater the winning margin. This is far-and-away the largest correlation of all statistics, which we can characterize as positive & strong **(R = 0.82)**. 
+
+Metres Gained has become one of the most fashionable statistics in AFL. An in-depth examination of what it means & does not mean can be read [here](https://www.espn.com.au/afl/story/_/id/27199381/metres-gained-breaking-afl-most-misunderstood-statistic). 
+
+It should be acknowledged the gurus at Champion Data have delved into this statistic in much greater depth. My characterization here is simplistic. Much of the nuance which is absent here is covered in [this article](https://www.foxsports.com.au/afl/afl-2020-afl-finals-afl-grand-final-premiership-odds-predictor-champion-data-premiership-profile-2020/news-story/d1ce45ef3111bb82cad8d2157664b922?fbclid=IwAR3tKoj_bVRbI3khWzZAqJ3E79ugjNIpe5_kkl2Zcr4vLbWUihA2tnGOhNY) (for example, delineating *effective* metres gained)
+
+Comparatively, the next most important metrics were moderate in strength. These were effective disposal percentage differential of the winning side **(R = 0.47)**, and how many more kicks the winning side had **(R=0.42)**. 
+
+We can look more closely at these relationships via a series of interactive scatterplots:
+
+### Scatterplots
+
+#### winning-Margin x Metres-Gained-Differential
+
+```{r cor plot 1}
+# the greater the MG discrepancy 
+Matches %>% 
+  dplyr::select(Home_team, Away_team, WinningTeam, margin, MG_Diff) %>% 
+  tauchart() %>% 
+  tau_point("margin", "MG_Diff") %>% 
+  tau_tooltip() 
+```
+
+Examining the scatterplot of metres gained & winning margin, a few further insights can be gleaned:
+
+* there are very few games where the winning team loses the metres-gained differential **(only 25 out of 207)**
+* The highest winning margin for the year for a team conceding the metres-gained statistic was 24 points (Geelong defeating North Melbourne, with a very small -9 metres gained). In other words, if a team does not win the metres gained statistic, they are very unlikely to win by a large margin 
+* The largest amount of metres gained conceded for a winning team was *-461 metres*, with Fremantle defeating Sydney despite clearly losing the territory battle 
+* Fremantle were also involved in the only clear outlying game, when they lost to West Coast by 91 points, but conceded only 559 metres (an abnormally small difference when compared to other losses of that margin)
+
+#### Winning-Margin x Disposal-Efficiency-Differential
+
+```{r cor plot 2}
+Matches %>% 
+  dplyr::select(Home_team, Away_team, WinningTeam, margin, DE_Diff) %>% 
+  tauchart() %>% 
+  tau_point("margin", "DE_Diff") %>% 
+  tau_tooltip() 
+```
+
+One interesting observation between winning margin and disposal efficiency differential is the poorest differential observed for a winning team was -8.7%, recorded by Collingwood in a one point defeat of West-Coast
+
+#### winning-Margin x Number-of-Kicks-Differential
+
+```{r cor plot 3}
+# the greater the MG discrepancy 
+Matches %>% 
+  dplyr::select(Home_team, Away_team, WinningTeam, margin, K_Diff) %>% 
+  tauchart() %>% 
+  tau_point("margin", "K_Diff") %>% 
+  tau_tooltip() 
+```
+
+There are four potential outlier matches in this plot, with all involving Richmond. In three of these outliers, Richmond won comfortably, despite recording more than 40 less kicks than there opposition (wins against Sydney, St Kilda & Brisbane). 
+
+Inversely, Richmond were defeated by Collingwood in round 2 by 44 points, conceding the equal largest amount of kicks for any game (+107). Other matches with similar kick-differentials resulted in much greater winning margins 
